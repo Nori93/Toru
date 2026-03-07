@@ -1,0 +1,153 @@
+#################################
+# Python
+#################################
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+#################################
+# Virtual Environments
+#################################
+
+venv/
+env/
+ENV/
+.venv/
+.conda/
+conda-env/
+
+#################################
+# Python Packaging
+#################################
+
+build/
+dist/
+.eggs/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
+#################################
+# Logs
+#################################
+
+*.log
+logs/
+
+#################################
+# Testing
+#################################
+
+.coverage
+.coverage.*
+.pytest_cache/
+nosetests.xml
+coverage.xml
+
+#################################
+# Jupyter Notebook
+#################################
+
+.ipynb_checkpoints
+
+#################################
+# IDE
+#################################
+
+.vscode/
+.idea/
+*.swp
+*.swo
+
+#################################
+# OS
+#################################
+
+.DS_Store
+Thumbs.db
+
+#################################
+# Environment Variables
+#################################
+
+.env
+.env.*
+.envrc
+
+#################################
+# AI / ML Models
+#################################
+
+*.h5
+*.hdf5
+*.onnx
+*.pb
+*.ckpt
+*.pt
+*.pth
+*.tflite
+*.joblib
+*.pickle
+*.pkl
+
+#################################
+# Large Datasets
+#################################
+
+data/
+datasets/
+dataset/
+training_data/
+raw_data/
+
+#################################
+# AI Training Artifacts
+#################################
+
+checkpoints/
+runs/
+wandb/
+mlruns/
+tensorboard/
+
+#################################
+# Model Outputs
+#################################
+
+outputs/
+predictions/
+results/
+assets/
+
+#################################
+# Temporary Files
+#################################
+
+tmp/
+temp/
+*.tmp
+
+#################################
+# Docker
+#################################
+
+docker-data/
+*.tar
+
+#################################
+# SQLite / Local Databases
+#################################
+
+*.db
+*.sqlite
+*.sqlite3
+
+#################################
+# Node / Frontend (if AI UI exists)
+#################################
+
+node_modules/
+dist/
+npm-debug.log
+yarn-error.log
