@@ -16,6 +16,7 @@ ENV/
 .venv/
 .conda/
 conda-env/
+sd_env/
 
 #################################
 # Python Packaging
