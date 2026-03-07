@@ -1,0 +1,261 @@
+import random
+from diffusers import StableDiffusionPipeline, DiffusionPipeline
+from diffusers.utils import export_to_video
+import torch
+import torch_directml
+import os
+from PIL import Image
+
+
+def _truncate_prompt(prompt: str, max_words: int = 60) -> str:
+    """Truncate very long prompts so they fit the model's max sequence length.
+
+    CLIP text encoders used by Stable Diffusion typically support ~77 tokens.
+    We approximate this by limiting the prompt to a reasonable number of words
+    to avoid "Token indices sequence length is longer than the specified
+    maximum sequence length for this model" errors.
+    """
+    
+
+    words = prompt.split()
+    if len(words) <= max_words:
+        return prompt
+    return " ".join(words[:max_words])
+
+# Use DirectML GPU for still images
+device = torch_directml.device()
+MODLE_ID = "cagliostrolab/animagine-xl-4.0"
+NEGATIVE_PROMPT = "blurry, low quality, bad anatomy, distorted face, extra limbs"
+WIDTH = 832
+HEIGHT = 1216
+
+pipe = None
+
+os.makedirs("assets", exist_ok=True)
+
+def load_pipeline():
+    global pipe
+    if pipe is None:
+        pipe = StableDiffusionPipeline.from_pretrained(
+                MODLE_ID, 
+                torch_dtype=torch.float16, 
+                custom_pipeline="lpw_stable_diffusion_xl", 
+                add_watermarker=False, 
+                safety_checker=None  # Disable safety checker for NSFW content
+        )
+        pipe = pipe.to(device)
+    return pipe
+
+def load_fireRed_pipeline():
+    global pipe
+    if pipe is None:
+        pipe = DiffusionPipeline.from_pretrained(
+                "FireRedTeam/FireRed-Image-Edit-1.0", 
+                #torch_dtype=torch.float16, 
+                add_watermarker=False, 
+                safety_checker=None  # Disable safety checker for NSFW content
+        )
+        pipe = pipe.to("cpu")
+    return pipe
+
+def generate_sprite(prompt, filename, seed):
+
+    generator = torch.Generator(device=device).manual_seed(seed)
+
+    # Avoid extremely long prompts that exceed the text encoder's limit
+    prompt = _truncate_prompt(prompt)
+
+    load_pipeline()
+
+    image = pipe(
+        prompt,
+        negative_prompt=NEGATIVE_PROMPT,
+        width=WIDTH,
+        height=HEIGHT,
+        num_inference_steps=28,
+        guidance_scale=5,
+        generator=generator,
+    ).images[0]
+
+    image.save(f"assets/{filename}")
+
+def generate_next_sprite(prompt, filename, seed,strength=0.55, init_sprite="toru_idle"):
+
+    generator = torch.Generator(device=device).manual_seed(seed)
+
+    init_image = Image.open(f"assets/{init_sprite}.png").convert("RGB")   
+
+    load_pipeline()
+
+    prompt = _truncate_prompt(prompt)
+
+    image = pipe(
+        prompt=prompt,
+        negative_prompt=NEGATIVE_PROMPT,
+        image=init_image,
+        width=WIDTH,
+        height=HEIGHT,    
+        strength=strength, # how much to change the original (0.8 = mostly new, 0.2 = mostly same)   
+        num_inference_steps=28,
+        guidance_scale=5,
+        generator=generator,
+    ).images[0]
+
+    image.save(f"assets/{filename}")
+
+def generate_sprite_base_on(prompt, filename, base_sprite, seed):
+
+    generator = torch.Generator(device=device).manual_seed(seed)
+
+    init_image = Image.open(f"assets/{base_sprite}").convert("RGB")   
+
+    load_pipeline()
+
+    prompt = _truncate_prompt(prompt)
+
+    image = pipe(
+        prompt=prompt,
+        negative_prompt=NEGATIVE_PROMPT,
+        image=init_image,
+        width=WIDTH,
+        height=HEIGHT,
+        strength=0.55, # how much to change the original (0.8 = mostly new, 0.2 = mostly same)
+        num_inference_steps=28,
+        guidance_scale=5,
+        generator=generator,
+    ).images[0]
+
+    image.save(f"assets/{filename}")
+
+def generate_motion_frames(description, base_seed=123456):
+
+    os.makedirs("frames", exist_ok=True)
+    load_pipeline()
+    base_prompt = get_base_prompt(description) + ", dynamic pose, motion blur"
+    base_prompt = _truncate_prompt(base_prompt)
+
+    for i in range(6):  # 6 keyframes
+
+        seed = base_seed + i
+        generator = torch.Generator(device=device).manual_seed(seed)
+
+        image = pipe(
+            base_prompt,
+            negative_prompt=NEGATIVE_PROMPT,
+            width=WIDTH,
+            height=HEIGHT,
+            num_inference_steps=28,
+            guidance_scale=7,
+            generator=generator
+        ).images[0]
+
+        image.save(f"frames/frame_{i}.png")
+
+    print("Keyframes generated.")
+
+
+def get_base_prompt(description):
+    description = _truncate_prompt(description)
+
+    return (
+        "1girl, upper body, nsfw, looking like for hentai" +
+        "same character, consistent face, same proportions, "
+        f"{description}, masterpiece, best quality"
+    )
+
+def get_base_prompt2(description):
+    description = _truncate_prompt(description)
+
+    return (
+        "1girl, full body,nsfw, looking like for hentai" +
+        "same character, consistent face, same proportions, "
+        f"{description}, masterpiece, best quality"
+    )
+
+
+def generate_toru_sprites(description):    
+
+    # 🔒 Fixed seed for identity
+    base_seed = random.randint(0, 999999999)  
+
+    # 🎨 Core identity prompt (DO NOT CHANGE STRUCTURE)
+    base_prompt = get_base_prompt(description)    
+
+    """
+    for i in range(100):
+
+        try:
+            base_seed = random.randint(0, 999999999) 
+            generate_sprite(
+                base_prompt,
+                f"toru_idle_{i}.png",
+                base_seed)
+            print(f"Generated toru_idle_{i}.png with seed {base_seed}")
+           
+        except Exception as e:
+            print(f"Generation failed (attempt {i+1}/100): {e}")
+            continue  # Try again with the same seed
+    """
+
+    
+    if not os.path.exists("assets/toru_idle.png"):
+        generate_sprite(
+            base_prompt,
+            "toru_idle.png",
+            base_seed
+        )
+
+   
+    if not os.path.exists("assets/toru_talk_A.png"):
+        generate_next_sprite(
+            base_prompt + ", mouth wide open, saying ah",
+            "toru_talk_A.png",
+            base_seed
+        )
+
+    if not os.path.exists("assets/toru_talk_E.png"):
+        generate_next_sprite(
+            base_prompt + ", wide horizontal mouth, saying EE",
+            "toru_talk_E.png",
+            base_seed
+        )
+    
+    if not os.path.exists("assets/toru_talk_O.png"):
+        generate_next_sprite(
+            base_prompt + ", round mouth, saying oh",
+            "toru_talk_O.png",
+            base_seed
+        )
+    
+    if not os.path.exists("assets/toru_talk_U.png"):
+        generate_next_sprite(
+            base_prompt + ", small rounded mouth, saying oo",
+            "toru_talk_U.png",
+            base_seed
+        )
+
+    if not os.path.exists("assets/toru_blink_closed.png"):
+        generate_next_sprite(
+            base_prompt + ", closed eyes",
+            "toru_blink_closed.png",
+            base_seed
+        )
+    
+    if not os.path.exists("assets/toru_blink_half.png"):
+        generate_next_sprite(
+            base_prompt + ", half closed eyes",
+            "toru_blink_half.png",
+            base_seed
+        )
+    
+   # prompt = get_base_prompt2(description)
+    
+   # if not os.path.exists("assets/toru_full_body.png"):
+       
+    #    generate_next_sprite(
+    #        prompt + "standing pose",
+    #        "toru_full_body.png",
+    #        base_seed
+    #    )
+    
+    
