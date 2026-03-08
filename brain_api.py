@@ -3,12 +3,22 @@ import os
 import sqlite3
 import ollama
 
+from toru_tools import TOOLS
 
-MEMORY_FILE = "toru_memory.json"  # legacy JSON file (used only for migration)
-DB_FILE = "toru_memory.db"
+# Reuse the same DB schema/name by default; can be overridden via env in Docker
+MEMORY_FILE = os.getenv("TORU_MEMORY_JSON", "toru_memory.json")  # legacy JSON (optional)
+DB_FILE = os.getenv("TORU_DB_FILE", "toru_memory.db")
 
 
 conversation_history: list[dict[str, str]] = []
+
+
+SYSTEM_PROMPT_WITH_TOOLS = (
+    "You are Toru, energetic anime assistant.\n"
+    "You can call tools by replying with JSON ONLY in this format:\n"
+    '{"tool": "tool_name", "args": {"arg1": "value"}}\n'
+    "Use tools only when they are genuinely helpful."
+)
 
 
 def _init_db(conn: sqlite3.Connection) -> None:
@@ -117,20 +127,17 @@ def _save_memory() -> None:
         conn.commit()
         conn.close()
     except Exception:
-        # Failing to save shouldn't crash Toru's brain; ignore silently.
+        # Failing to save shouldn't crash the API; ignore silently.
         pass
 
 
-def ask_toru(user_input: str) -> str:
-    """Call Ollama, updating and using persistent conversation history."""
+def _chat_once(system_prompt: str) -> str:
+    """Send one chat turn to Ollama and append the assistant reply to history."""
 
     global conversation_history
 
-    # Record the latest user message in long‑term memory
-    conversation_history.append({"role": "user", "content": user_input})
-
     messages = [
-        {"role": "system", "content": "You are Toru, energetic anime assistant."},
+        {"role": "system", "content": system_prompt},
         *conversation_history,
     ]
 
@@ -139,16 +146,91 @@ def ask_toru(user_input: str) -> str:
         messages=messages,
     )
 
-    answer = response["message"]["content"]
+    content = response["message"]["content"].strip()
+    conversation_history.append({"role": "assistant", "content": content})
+    return content
 
-    # Store Toru's answer as part of the long‑term memory
-    conversation_history.append({"role": "assistant", "content": answer})
+
+def ask_toru(user_input: str) -> str:
+    """Simpler helper that *does not* use tools (backwards-compatible)."""
+
+    global conversation_history
+
+    conversation_history.append({"role": "user", "content": user_input})
+
+    answer = _chat_once("You are Toru, energetic anime assistant.")
     _save_memory()
-
     return answer
 
 
+def ask_toru_with_tools(user_input: str, max_tool_calls: int = 4) -> str:
+    """Ask Toru a question, allowing her to call registered Python tools.
+
+    The model may respond with a JSON tool call, which we execute and feed
+    back into the conversation, before asking again for a final answer.
+    """
+
+    global conversation_history
+
+    conversation_history.append({"role": "user", "content": user_input})
+
+    tool_calls = 0
+
+    while True:
+        content = _chat_once(SYSTEM_PROMPT_WITH_TOOLS)
+
+        # Try to interpret the reply as a tool call JSON
+        try:
+            obj = json.loads(content)
+            if not isinstance(obj, dict):
+                raise ValueError("Tool JSON must be an object")
+            tool_name = obj.get("tool")
+            args = obj.get("args", {}) or {}
+        except Exception:
+            # Not a valid tool call → treat as final answer
+            answer = content
+            _save_memory()
+            return answer
+
+        if not tool_name:
+            # No tool field → treat as final answer
+            answer = content
+            _save_memory()
+            return answer
+
+        if tool_name not in TOOLS:
+            # Unknown tool: let Toru know and continue
+            conversation_history.append(
+                {
+                    "role": "assistant",
+                    "content": f"Tool '{tool_name}' is not available.",
+                }
+            )
+            tool_calls += 1
+        else:
+            fn = TOOLS[tool_name]
+            try:
+                if not isinstance(args, dict):
+                    raise ValueError("'args' must be a JSON object")
+                result = fn(**args)
+            except Exception as e:
+                result = f"Tool '{tool_name}' failed: {e!r}"
+
+            # Feed tool result back into the conversation
+            conversation_history.append(
+                {
+                    "role": "assistant",
+                    "content": f"[tool:{tool_name} result] {result}",
+                }
+            )
+            tool_calls += 1
+
+        if tool_calls >= max_tool_calls:
+            # Avoid infinite tool-calling loops; ask once more for a final answer
+            final = _chat_once(SYSTEM_PROMPT_WITH_TOOLS)
+            _save_memory()
+            return final
+
+
+# Initialize memory when the module is imported (useful for web apps)
 _load_memory()
-
-
-print("🐉 Toru Brain Online! 🧠")

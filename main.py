@@ -1,3 +1,5 @@
+import os
+
 from brain import ask_toru
 from voice import speak
 from image_generator import generate_toru_sprites
@@ -8,9 +10,10 @@ import time
 import queue
 
 print("🐉 Toru Modular System Online!")
-description = ask_toru("Describe your appearance in prompt for generating your sprites. ")
-print("Toru Appearance Description:", description)
-generate_toru_sprites(description)
+if not os.path.exists("assets/toru_idle.png"):
+    description = ask_toru("Describe your appearance in prompt for generating your sprites.keep it short, and i like gothic sexy  with big ass and tits ")
+    print("Toru Appearance Description:", description)
+    generate_toru_sprites(description)
 
 avatar = ToruAvatar()
 avatar.start()
