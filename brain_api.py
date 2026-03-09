@@ -1,13 +1,40 @@
 import json
 import os
-import sqlite3
 import ollama
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    create_engine,
+    delete,
+    func,
+    select,
+)
 
 from toru_tools import TOOLS
 
 # Reuse the same DB schema/name by default; can be overridden via env in Docker
 MEMORY_FILE = os.getenv("TORU_MEMORY_JSON", "toru_memory.json")  # legacy JSON (optional)
 DB_FILE = os.getenv("TORU_DB_FILE", "toru_memory.db")
+
+# Prefer an explicit DB URL when provided; otherwise fall back to local SQLite
+DB_URL = os.getenv("TORU_DB_URL") or f"sqlite:///{DB_FILE}"
+
+engine = create_engine(DB_URL, future=True)
+metadata = MetaData()
+
+messages_table = Table(
+    "messages",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("role", String, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("created_at", DateTime, server_default=func.now()),
+)
 
 
 conversation_history: list[dict[str, str]] = []
@@ -21,19 +48,14 @@ SYSTEM_PROMPT_WITH_TOOLS = (
 )
 
 
-def _init_db(conn: sqlite3.Connection) -> None:
-    """Ensure the SQLite schema for conversation history exists."""
+def _init_db() -> None:
+    """Ensure the DB schema for conversation history exists."""
 
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
+    try:
+        metadata.create_all(engine)
+    except Exception:
+        # Schema creation errors should not crash the whole app.
+        pass
 
 
 def _load_memory_from_json_legacy() -> list[dict[str, str]]:
@@ -68,16 +90,23 @@ def _load_memory_from_json_legacy() -> list[dict[str, str]]:
 
 
 def _load_memory() -> None:
-    """Load persistent conversation history from SQLite (migrating legacy JSON once)."""
+    """Load persistent conversation history from the configured database.
+
+    If the DB is empty, attempt a one-time migration from the legacy JSON
+    file, then persist that into the DB.
+    """
 
     global conversation_history
 
     try:
-        conn = sqlite3.connect(DB_FILE)
-        _init_db(conn)
+        _init_db()
 
-        cursor = conn.execute("SELECT role, content FROM messages ORDER BY id ASC")
-        rows = cursor.fetchall()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(messages_table.c.role, messages_table.c.content).order_by(
+                    messages_table.c.id
+                )
+            ).all()
 
         if rows:
             conversation_history = [
@@ -86,46 +115,47 @@ def _load_memory() -> None:
                 if role in {"user", "assistant"} and isinstance(content, str)
             ]
         else:
-            # SQLite empty – try migrating from legacy JSON, if present
+            # DB empty – try migrating from legacy JSON, if present
             legacy = _load_memory_from_json_legacy()
             conversation_history = legacy
 
             if legacy:
-                # Persist migrated data into SQLite
-                conn.executemany(
-                    "INSERT INTO messages (role, content) VALUES (?, ?)",
-                    [(m["role"], m["content"]) for m in legacy],
-                )
-                conn.commit()
-
-        conn.close()
+                # Persist migrated data into the DB
+                with engine.begin() as conn:
+                    conn.execute(
+                        messages_table.insert(),
+                        [
+                            {"role": m["role"], "content": m["content"]}
+                            for m in legacy
+                        ],
+                    )
     except Exception:
         # If anything goes wrong, start with a fresh in-memory history
         conversation_history = []
 
 
 def _save_memory() -> None:
-    """Persist the full conversation history to SQLite."""
+    """Persist the full conversation history to the configured database."""
 
     try:
-        conn = sqlite3.connect(DB_FILE)
-        _init_db(conn)
+        _init_db()
 
-        # Simple approach: replace all rows with the current in-memory history
-        conn.execute("DELETE FROM messages")
-        if conversation_history:
-            conn.executemany(
-                "INSERT INTO messages (role, content) VALUES (?, ?)",
-                [
-                    (m.get("role"), m.get("content"))
-                    for m in conversation_history
-                    if m.get("role") in {"user", "assistant"}
-                    and isinstance(m.get("content"), str)
-                ],
-            )
-
-        conn.commit()
-        conn.close()
+        with engine.begin() as conn:
+            # Simple approach: replace all rows with the current in-memory history
+            conn.execute(delete(messages_table))
+            if conversation_history:
+                conn.execute(
+                    messages_table.insert(),
+                    [
+                        {
+                            "role": m.get("role"),
+                            "content": m.get("content"),
+                        }
+                        for m in conversation_history
+                        if m.get("role") in {"user", "assistant"}
+                        and isinstance(m.get("content"), str)
+                    ],
+                )
     except Exception:
         # Failing to save shouldn't crash the API; ignore silently.
         pass

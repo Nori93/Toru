@@ -21,6 +21,18 @@ except Exception:
             "Image generation is not available in this environment (missing diffusers/torch)."
         )
 
+try:
+    # Local text-to-speech using Piper; may not be available in Docker
+    from voice import speak as _speak
+    HAS_TTS = True
+except Exception:
+    HAS_TTS = False
+
+    def _speak(*args, **kwargs) -> None:  # type: ignore[override]
+        raise RuntimeError(
+            "Text-to-speech is not available in this environment (missing Piper/voice stack)."
+        )
+
 
 def generate_sprites(description: str) -> str:
     """Generate/update Toru sprites based on a text description.
@@ -38,19 +50,33 @@ def ping(message: str = "pong") -> str:
     return f"Ping result: {message}"
 
 
-def generate_image(prompt: str) -> int:
-    """Tool: generate a single image from a prompt and return its ID.
+def generate_image(prompt: str) -> dict:
+    """Tool: generate a single image from a prompt.
 
-    This is designed to be called by Toru via the tool-calling system or
-    directly from the API. The returned integer is the image ID used in the
-    filename assets/generated/img_<id>.png.
+    Returns a dict with at least::
+
+        {"image_id": <int>, "seed": <int>}
+
+    The image is saved as assets/generated/img_<id>.png, and the metadata
+    can be logged to the database by the image-service.
     """
 
     return generate_image_from_prompt(prompt)
+
+
+def text_to_speech(text: str) -> str:
+    """Tool: convert text to speech using the local Piper TTS.
+
+    This plays audio on the host where the TTS stack is installed.
+    """
+
+    _speak(text)
+    return "Text-to-speech playback started."
 
 
 TOOLS: Dict[str, Callable[..., Any]] = {
     "generate_sprites": generate_sprites,
     "ping": ping,
     "generate_image": generate_image,
+    "text_to_speech": text_to_speech,
 }

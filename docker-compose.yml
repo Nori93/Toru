@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16
+    container_name: toru-db
+    environment:
+      - POSTGRES_USER=toru
+      - POSTGRES_PASSWORD=toru
+      - POSTGRES_DB=toru
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  ask-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.ask
+    container_name: toru-ask
+    environment:
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - TORU_DB_URL=postgresql+psycopg2://toru:toru@db:5432/toru
+
+  # image-service:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.image
+  #   container_name: toru-image
+  #   environment:
+  #     - TORU_DB_URL=postgresql+psycopg2://toru:toru@db:5432/toru
+
+  tts-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.tts
+    container_name: toru-tts
+    environment:
+      - TORU_DB_URL=postgresql+psycopg2://toru:toru@db:5432/toru
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    container_name: toru-gateway
+    environment:
+      - ASK_SERVICE_URL=http://ask-service:8000
+      - IMAGE_SERVICE_URL=http://image-service:8000
+      - TTS_SERVICE_URL=http://tts-service:8000
+    ports:
+      - "8080:8000"
+    depends_on:
+      - db
+      - ask-service
+      - tts-service
+
+volumes:
+  pgdata:

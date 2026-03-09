@@ -15,7 +15,7 @@ COPY . .
 
 # Install Python dependencies
 # NOTE: you may want to replace this with a requirements.txt if available.
-RUN pip install --no-cache-dir fastapi uvicorn ollama
+RUN pip install --no-cache-dir fastapi uvicorn ollama sqlalchemy psycopg2-binary
 
 # Expose the FastAPI port
 EXPOSE 8000

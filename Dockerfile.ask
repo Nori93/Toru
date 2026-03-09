@@ -1,0 +1,21 @@
+# Dockerfile for Toru Ask service
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+
+RUN pip install --no-cache-dir fastapi uvicorn ollama httpx sqlalchemy psycopg2-binary
+
+EXPOSE 8000
+
+ENV TORU_DB_FILE=/app/toru_memory.db \
+    TORU_MEMORY_JSON=/app/toru_memory.json
+
+CMD ["uvicorn", "ask_app:app", "--host", "0.0.0.0", "--port", "8000"]

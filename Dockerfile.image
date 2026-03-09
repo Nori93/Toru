@@ -1,0 +1,28 @@
+# Dockerfile for Toru Image service
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . .
+
+RUN pip install --no-cache-dir \
+    fastapi uvicorn httpx sqlalchemy psycopg2-binary \
+    pillow diffusers==0.36.0 transformers accelerate safetensors
+
+# Install PyTorch CPU wheels from the official PyTorch index
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch
+
+EXPOSE 8000
+
+ENV TORU_DB_FILE=/app/toru_memory.db \
+    TORU_MEMORY_JSON=/app/toru_memory.json
+
+CMD ["uvicorn", "image_app:app", "--host", "0.0.0.0", "--port", "8000"]

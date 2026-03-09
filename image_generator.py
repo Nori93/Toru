@@ -1,10 +1,16 @@
 import random
+import os
+
 from diffusers import StableDiffusionPipeline, DiffusionPipeline
 from diffusers.utils import export_to_video
 import torch
-import torch_directml
-import os
 from PIL import Image
+
+try:
+    # Preferred on Windows hosts with DirectML-capable GPUs
+    import torch_directml  # type: ignore[import]
+except Exception:  # pragma: no cover - optional, not available in Linux containers
+    torch_directml = None  # type: ignore[assignment]
 
 
 pipe = None
@@ -54,13 +60,21 @@ def _truncate_prompt(prompt: str, max_words: int = 45) -> str:
     return " ".join(words[:max_words])
 
 
-# Use DirectML GPU for still images
-device = torch_directml.device()
+# Select the best available device.
+# - DirectML (Windows host) when torch_directml is available
+# - CUDA if available in the environment
+# - Otherwise, CPU (works everywhere, but slower)
+if torch_directml is not None:
+    device = torch_directml.device()
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
 MODLE_ID = "cagliostrolab/animagine-xl-4.0"
 NEGATIVE_PROMPT = "blurry, low quality, bad anatomy, distorted face, extra limbs"
-WIDTH = 832
-HEIGHT = 1216
-
+WIDTH = 512
+HEIGHT = 768
+NUM_INFERENCE_STEPS = 20
 os.makedirs("assets", exist_ok=True)
 
 
@@ -89,14 +103,23 @@ def _next_generated_image_id() -> int:
 def load_pipeline():
     global pipe
     if pipe is None:
+        # Use float16 on GPU/DirectML, float32 on CPU for compatibility
+        dtype = torch.float16 if getattr(device, "type", None) != "cpu" else torch.float32
+
         pipe = StableDiffusionPipeline.from_pretrained(
-                MODLE_ID, 
-                torch_dtype=torch.float16, 
-                custom_pipeline="lpw_stable_diffusion_xl", 
-                add_watermarker=False, 
+                MODLE_ID,
+                torch_dtype=dtype,
+                custom_pipeline="lpw_stable_diffusion_xl",
+                add_watermarker=False,
                 safety_checker=None  # Disable safety checker for NSFW content
         )
-        pipe = pipe.to(device)
+
+        # Move pipeline to the selected device
+        if torch_directml is not None:
+            pipe = pipe.to(device)
+        else:
+            # device is a torch.device for CUDA/CPU
+            pipe = pipe.to(device)
     return pipe
 
 def load_fireRed_pipeline():
@@ -125,7 +148,7 @@ def generate_sprite(prompt, filename, seed):
         negative_prompt=NEGATIVE_PROMPT,
         width=WIDTH,
         height=HEIGHT,
-        num_inference_steps=28,
+        num_inference_steps=NUM_INFERENCE_STEPS,
         guidance_scale=5,
         generator=generator,
     ).images[0]
@@ -149,7 +172,7 @@ def generate_next_sprite(prompt, filename, seed,strength=0.55, init_sprite="toru
         width=WIDTH,
         height=HEIGHT,    
         strength=strength, # how much to change the original (0.8 = mostly new, 0.2 = mostly same)   
-        num_inference_steps=28,
+        num_inference_steps=NUM_INFERENCE_STEPS,
         guidance_scale=5,
         generator=generator,
     ).images[0]
@@ -173,7 +196,7 @@ def generate_sprite_base_on(prompt, filename, base_sprite, seed):
         width=WIDTH,
         height=HEIGHT,
         strength=0.55, # how much to change the original (0.8 = mostly new, 0.2 = mostly same)
-        num_inference_steps=28,
+        num_inference_steps=NUM_INFERENCE_STEPS,
         guidance_scale=5,
         generator=generator,
     ).images[0]
@@ -197,7 +220,7 @@ def generate_motion_frames(description, base_seed=123456):
             negative_prompt=NEGATIVE_PROMPT,
             width=WIDTH,
             height=HEIGHT,
-            num_inference_steps=28,
+            num_inference_steps=NUM_INFERENCE_STEPS,
             guidance_scale=7,
             generator=generator
         ).images[0]
@@ -306,11 +329,11 @@ def generate_image_from_prompt(prompt: str) -> int:
         negative_prompt=NEGATIVE_PROMPT,
         width=WIDTH,
         height=HEIGHT,
-        num_inference_steps=28,
+        num_inference_steps=NUM_INFERENCE_STEPS,
         guidance_scale=5,
         generator=generator,
     ).images[0]
 
     image.save(filename)
 
-    return image_id
+    return {"image_id": image_id, "seed": seed}
